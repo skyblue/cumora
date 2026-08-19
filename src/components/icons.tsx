@@ -29,6 +29,9 @@ export const IAgent = (p: IconProps) => (
 export const ITasks = (p: IconProps) => (
   <svg {...base} {...p}><path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
 )
+export const IWorkflow = (p: IconProps) => (
+  <svg {...base} {...p}><rect x="2" y="3" width="6" height="5" rx="1"/><rect x="16" y="3" width="6" height="5" rx="1"/><rect x="9" y="10" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="4" rx="1"/><rect x="16" y="17" width="6" height="4" rx="1"/><path d="M5 8v3.5a.5.5 0 00.5.5H9M19 8v3.5a.5.5 0 01-.5.5H15M12 15v2"/></svg>
+)
 export const IMemory = (p: IconProps) => (
   <svg {...base} {...p}><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h4M16 3h6v6"/><path d="M21 3l-5.5 5.5"/></svg>
 )

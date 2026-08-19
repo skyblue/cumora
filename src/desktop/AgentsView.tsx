@@ -5,9 +5,11 @@ import { useParticipants } from '@/stores/participants'
 import { useComputers } from '@/stores/computers'
 import { useConversations } from '@/stores/conversations'
 import { Avatar } from '@/components/Avatar'
-import { IPlus } from '@/components/icons'
+import { IPlus, IWorkflow } from '@/components/icons'
 import { AgentEditor } from '@/components/AgentEditor'
+import { AgentTeamWorkflowSidebar } from '@/components/AgentTeamWorkflowSidebar'
 import { api } from '@/api/client'
+import { cn } from '@/lib/utils'
 import type { Participant } from '@/types'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -261,6 +263,7 @@ export function AgentsView() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Participant | null>(null)
   const [confirmingOffboard, setConfirmingOffboard] = useState<Participant | null>(null)
+  const [workflowOpen, setWorkflowOpen] = useState(false)
 
   const openCreate = () => { setEditing(null); setEditorOpen(true) }
   const openEdit = (p: Participant) => { setEditing(p); setEditorOpen(true) }
@@ -275,91 +278,114 @@ export function AgentsView() {
   }
 
   return (
-    <main className="overflow-y-auto p-8 pt-6"
-      style={{ background: 'linear-gradient(180deg, transparent, var(--paper))' }}>
-      <div className="max-w-[1240px] mx-auto">
-        <div className="mb-6 flex items-end gap-4">
-          <div className="flex-1">
-            <h1 className="font-display font-medium text-[36px] tracking-tight text-ink-900 mb-1" style={{ letterSpacing: '-0.025em' }}>
-              Your team <em className="italic text-skype-deep" style={{ fontWeight: 400 }}>of {list.length}</em>
-            </h1>
-            <div className="font-display italic font-normal text-[15px] text-ink-500">
-              Agents work on their own and with each other. They'll loop you in when they need a call.
+    <div className="flex h-full min-h-0 overflow-hidden">
+      {/* ── Main content ───────────────────────────────────────────────────── */}
+      <main className="flex-1 overflow-y-auto p-8 pt-6 min-w-0"
+        style={{ background: 'linear-gradient(180deg, transparent, var(--paper))' }}>
+        <div className="max-w-[1240px] mx-auto">
+          <div className="mb-6 flex items-end gap-4">
+            <div className="flex-1">
+              <h1 className="font-display font-medium text-[36px] tracking-tight text-ink-900 mb-1" style={{ letterSpacing: '-0.025em' }}>
+                Your team <em className="italic text-skype-deep" style={{ fontWeight: 400 }}>of {list.length}</em>
+              </h1>
+              <div className="font-display italic font-normal text-[15px] text-ink-500">
+                Agents work on their own and with each other. They'll loop you in when they need a call.
+              </div>
+            </div>
+            {/* Workflow sidebar toggle */}
+            <button
+              onClick={() => setWorkflowOpen((o) => !o)}
+              title="Agent Teams 活动"
+              aria-label="Toggle workflow sidebar"
+              className={cn(
+                'inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[10px] text-[12.5px] font-semibold transition',
+                workflowOpen
+                  ? 'bg-sky2-50 text-skype-deep border border-sky2-200'
+                  : 'bg-cloud text-ink-700 border border-ink-100 hover:bg-sky2-50 hover:text-skype-deep',
+              )}
+            >
+              <IWorkflow className="w-4 h-4" />
+              Workflow
+            </button>
+            <button
+              onClick={openCreate}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[10px] text-[12.5px] font-semibold text-white transition"
+              style={{
+                background: 'var(--skype)',
+                boxShadow: '0 4px 12px -3px rgba(0, 168, 240, 0.5)',
+              }}
+            >
+              <IPlus className="w-4 h-4" strokeWidth={2.5} />
+              New agent
+            </button>
+          </div>
+
+          <div className="flex gap-3 mb-6 text-[11px]">
+            <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
+              <b className="text-skype-deep font-semibold">{list.filter((a) => a.status === 'working').length}</b> working
+            </div>
+            <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
+              <b className="text-thinking font-semibold">{list.filter((a) => a.status === 'thinking').length}</b> thinking
+            </div>
+            <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
+              <b className="text-avail font-semibold">{list.filter((a) => a.status === 'avail').length}</b> available
+            </div>
+            <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
+              <b className="text-resting font-semibold">{list.filter((a) => a.status === 'resting').length}</b> resting
             </div>
           </div>
-          <button
-            onClick={openCreate}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[10px] text-[12.5px] font-semibold text-white transition"
-            style={{
-              background: 'var(--skype)',
-              boxShadow: '0 4px 12px -3px rgba(0, 168, 240, 0.5)',
-            }}
-          >
-            <IPlus className="w-4 h-4" strokeWidth={2.5} />
-            New agent
-          </button>
-        </div>
 
-        <div className="flex gap-3 mb-6 text-[11px]">
-          <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
-            <b className="text-skype-deep font-semibold">{list.filter((a) => a.status === 'working').length}</b> working
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {list.map((a) => (
+              <AgentCard key={a.id} p={a} onEdit={openEdit} onDelete={setConfirmingOffboard} />
+            ))}
+            <HireCard onClick={openCreate} />
           </div>
-          <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
-            <b className="text-thinking font-semibold">{list.filter((a) => a.status === 'thinking').length}</b> thinking
-          </div>
-          <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
-            <b className="text-avail font-semibold">{list.filter((a) => a.status === 'avail').length}</b> available
-          </div>
-          <div className="py-1.5 px-3 bg-cloud rounded-full text-ink-700 border border-ink-100">
-            <b className="text-resting font-semibold">{list.filter((a) => a.status === 'resting').length}</b> resting
-          </div>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {list.map((a) => (
-            <AgentCard key={a.id} p={a} onEdit={openEdit} onDelete={setConfirmingOffboard} />
-          ))}
-          <HireCard onClick={openCreate} />
-        </div>
-
-        {departed.length > 0 && (
-          <div className="mt-10 mb-2">
-            <h2 className="font-display font-medium text-[20px] tracking-tight text-ink-700 mb-1.5" style={{ letterSpacing: '-0.02em' }}>
-              Former teammates <em className="italic text-ink-500" style={{ fontWeight: 400, fontSize: '0.85em' }}>· {departed.length}</em>
-            </h2>
-            <div className="font-display italic font-normal text-[13px] text-ink-500 mb-4">
-              Off-boarded — their memory and history are preserved. Rehire any time and they'll pick up where they left off.
+          {departed.length > 0 && (
+            <div className="mt-10 mb-2">
+              <h2 className="font-display font-medium text-[20px] tracking-tight text-ink-700 mb-1.5" style={{ letterSpacing: '-0.02em' }}>
+                Former teammates <em className="italic text-ink-500" style={{ fontWeight: 400, fontSize: '0.85em' }}>· {departed.length}</em>
+              </h2>
+              <div className="font-display italic font-normal text-[13px] text-ink-500 mb-4">
+                Off-boarded — their memory and history are preserved. Rehire any time and they'll pick up where they left off.
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {departed.map((p) => <FormerAgentCard key={p.id} p={p} onRehire={rehire} />)}
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {departed.map((p) => <FormerAgentCard key={p.id} p={p} onRehire={rehire} />)}
-            </div>
-          </div>
-        )}
+          )}
 
-        {humans.length > 0 && (
-          <div className="mt-10 mb-2">
-            <h2 className="font-display font-medium text-[24px] tracking-tight text-ink-900 mb-1.5" style={{ letterSpacing: '-0.02em' }}>
-              Human teammates
-            </h2>
-            <div className="font-display italic font-normal text-[13.5px] text-ink-500 mb-5">
-              People you work with.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {humans.map((p) => (
-                <div key={p.id} className="bg-cloud rounded-[12px] p-4 flex items-center gap-3"
-                  style={{ border: '1px solid var(--ink-100)' }}>
-                  <Avatar p={p} size={40} />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-[14px] text-ink-900">{p.name}</div>
-                    <div className="text-[11px] text-ink-500">{STATUS_LABEL[p.status] ?? 'idle'}</div>
+          {humans.length > 0 && (
+            <div className="mt-10 mb-2">
+              <h2 className="font-display font-medium text-[24px] tracking-tight text-ink-900 mb-1.5" style={{ letterSpacing: '-0.02em' }}>
+                Human teammates
+              </h2>
+              <div className="font-display italic font-normal text-[13.5px] text-ink-500 mb-5">
+                People you work with.
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                {humans.map((p) => (
+                  <div key={p.id} className="bg-cloud rounded-[12px] p-4 flex items-center gap-3"
+                    style={{ border: '1px solid var(--ink-100)' }}>
+                    <Avatar p={p} size={40} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-[14px] text-ink-900">{p.name}</div>
+                      <div className="text-[11px] text-ink-500">{STATUS_LABEL[p.status] ?? 'idle'}</div>
+                    </div>
+                    <span className="text-[9px] font-bold py-0.5 px-1.5 rounded uppercase tracking-wider bg-coral-soft text-coral-deep">human</span>
                   </div>
-                  <span className="text-[9px] font-bold py-0.5 px-1.5 rounded uppercase tracking-wider bg-coral-soft text-coral-deep">human</span>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      </main>
+
+      {/* ── Workflow sidebar ──────────────────────────────────────────────── */}
+      {workflowOpen && (
+        <AgentTeamWorkflowSidebar onClose={() => setWorkflowOpen(false)} />
+      )}
 
       {editorOpen && (
         <AgentEditor agent={editing} onClose={() => { setEditorOpen(false); setEditing(null) }} />
@@ -371,6 +397,7 @@ export function AgentsView() {
           onConfirmed={() => setConfirmingOffboard(null)}
         />
       )}
-    </main>
+    </div>
   )
 }
+
