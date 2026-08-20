@@ -1,0 +1,15 @@
+diff --git a/install.js b/install.js
+index a0c177dea41609f8adfe75fb17bd39ae65b0ad0c..dc6944fc7c81de97a840ac25ab94e9444f204a11 100644
+--- a/install.js
++++ b/install.js
+@@ -11,6 +11,10 @@ const path = require('path');
+ 
+ const { version } = require('./package');
+ 
++if (!process.env.ELECTRON_MIRROR) {
++  process.env.ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/';
++}
++
+ if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
+   process.exit(0);
+ }
