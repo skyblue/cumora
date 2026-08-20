@@ -30,6 +30,7 @@ import { promisify } from 'node:util'
 const execFileP = promisify(execFile)
 
 import { type TokenUsage, usageFromClaude } from '../cost.js'
+import { buildEngineSessionEvent, shouldRecordEngineSession, type PreviousEngineSession } from './session-observability.js'
 import { GLANCE_YIELD_RULES } from '../glance-protocol.js'
 import {
   composeMemoryDigest,
@@ -1723,6 +1724,8 @@ export class AgentRunner {
    *  during this turn carry it so the ledger can link them back to the run.
    *  Cleared at turn end. */
   private currentRunId: string | null = null
+  /** Last session event emitted, used to keep each run's timeline compact. */
+  private lastEngineSessionEvent: PreviousEngineSession | null = null
 
   constructor(
     private readonly cfg: DaemonConfig,
@@ -1810,6 +1813,23 @@ export class AgentRunner {
     if (this.engine === this.adapter.id && this.sessionStore.engine === this.engine) return this.sessionId
     console.error(`[computer] ${this.agent.id} refused cross-engine resume: store=${this.sessionStore.engine}, runner=${this.engine}, adapter=${this.adapter.id}`)
     return null
+  }
+
+  /** Publish the final, still-valid session id for a run. This intentionally
+   * runs after stale-resume handling: a failed resume must never leave its old
+   * id in the run timeline. */
+  private recordEngineSession(runId: string | undefined): void {
+    const event = buildEngineSessionEvent({ engine: this.adapter.id, sessionId: this.sessionId })
+    if (!event || !shouldRecordEngineSession({
+      runId,
+      sessionId: event.data.sessionId,
+      previous: this.lastEngineSessionEvent,
+    })) return
+    this.lastEngineSessionEvent = { runId: runId!, sessionId: event.data.sessionId }
+    void runtimeBest(this.cfg.serverUrl, '/events', this.token, {
+      runId,
+      ...event,
+    })
   }
 
   /** True when an engine error means the session is unusable and the NEXT wake
@@ -2686,6 +2706,7 @@ export class AgentRunner {
       if (engineError && result.failure?.kind !== 'resume-not-found' && this.mustResetSession(engineError, false)) {
         await this.resetEngineSession(this.resetReason(engineError))
       }
+      this.recordEngineSession(run?.runId)
     } catch (err) {
       exitCode = 1
       engineError = this.visibleEngineError(1, err instanceof Error ? (err.stack || err.message) : String(err))
@@ -3074,6 +3095,7 @@ export class AgentRunner {
           if (engineError && result.failure?.kind !== 'resume-not-found' && this.mustResetSession(engineError, false)) {
             await this.resetEngineSession(this.resetReason(engineError))
           }
+          this.recordEngineSession(run?.runId)
         } catch (err) {
           console.error(`[computer] ${this.agent.id} engine spawn failed:`, redactProviderSecret(err instanceof Error ? err.message : String(err), this.provider))
           exitCode = 1

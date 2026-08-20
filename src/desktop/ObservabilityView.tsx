@@ -14,12 +14,22 @@ import { Select } from '@/components/Select'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { RichBody, CodeBlock } from '@/components/Message'
 import { useParticipants } from '@/stores/participants'
+import {
+  buildResumeCommand,
+  formatAgentRunLogs,
+  getAgentRunSession,
+  projectObservableEvent,
+  sortAgentRunEvents,
+  type AgentRunEventCategory,
+  type SafeAgentEvent,
+} from '@/lib/agentRunDetail'
 import { useResizableWidth } from '@/lib/useResizableWidth'
 import { useT, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { buildWorkflowGraph } from './agent-workflow'
 
 type StatusFilter = ApiAgentRunStatus | 'all'
+type EventFilter = 'all' | AgentRunEventCategory
 type DevPanel = 'traces' | 'workflow' | 'workspace' | 'triage' | 'wakes'
 const DEV_PANELS: DevPanel[] = ['traces', 'workflow', 'workspace', 'triage', 'wakes']
 const PANEL_LABEL_KEY: Record<Exclude<DevPanel, 'workflow'>, MessageKey> = { traces: 'obs.panelTraces', workspace: 'obs.panelWorkspace', triage: 'obs.panelTriage', wakes: 'obs.panelWakes' }
@@ -32,6 +42,12 @@ const TRIAGE_WINDOWS: { hours: number; key: MessageKey }[] = [
 ]
 
 const STATUS_OPTIONS: StatusFilter[] = ['all', 'running', 'stalled', 'failed', 'completed', 'skipped']
+const EVENT_FILTERS: Array<{ value: EventFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'agent', label: 'Agent' },
+  { value: 'tool-call', label: 'Tool Call' },
+  { value: 'tool-result', label: 'Tool Result' },
+]
 
 const STATUS_STYLE: Record<ApiAgentRunStatus, { key: MessageKey; cls: string; dot: string }> = {
   running: {
@@ -122,6 +138,12 @@ function MetaGrid({ items }: { items: Array<{ label: string; value: unknown }> }
       ))}
     </div>
   )
+}
+
+function triggerLabel(trigger: Record<string, unknown>): string {
+  const source = typeof trigger.source === 'string' ? trigger.source : null
+  const engine = typeof trigger.engine === 'string' ? trigger.engine : null
+  return [source, engine].filter(Boolean).join(' · ') || 'Unknown trigger'
 }
 
 function PayloadBlock({ label, value, empty }: { label: string; value: unknown; empty?: string }) {
@@ -283,6 +305,28 @@ function EventDetails({ event }: { event: ApiAgentEvent }) {
   )
 }
 
+function SafeEventDetails({ event }: { event: SafeAgentEvent }) {
+  const entries = Object.entries(event.details)
+  return (
+    <details className="mt-3">
+      <summary className="cursor-pointer select-none text-[11px] font-semibold text-skype-deep">
+        View observable details
+      </summary>
+      {entries.length === 0 ? (
+        <div className="mt-2 rounded-[9px] border border-ink-100 bg-paper px-3 py-2 text-[11px] text-ink-400">
+          No additional observable details.
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {entries.map(([label, value]) => (
+            <PayloadBlock key={label} label={label} value={value} />
+          ))}
+        </div>
+      )}
+    </details>
+  )
+}
+
 function bytes(size: number): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
@@ -414,10 +458,16 @@ function RunRow({ run, active, onClick }: { run: ApiAgentRun; active: boolean; o
   )
 }
 
-function EventRow({ event }: { event: ApiAgentEvent }) {
+function eventCategoryLabel(category: AgentRunEventCategory): string {
+  if (category === 'tool-call') return 'Tool Call'
+  if (category === 'tool-result') return 'Tool Result'
+  return 'Agent'
+}
+
+function EventRow({ event }: { event: SafeAgentEvent }) {
   const t = useT()
   return (
-    <div className="relative grid grid-cols-[98px_18px_minmax(0,1fr)] gap-3">
+    <div className="relative grid grid-cols-[98px_18px_minmax(0,1fr)] gap-3" data-event-category={event.category}>
       <div className="pt-1 text-right font-mono text-[11px] text-ink-400">{clock(event.createdAt)}</div>
       <div className="relative flex justify-center">
         <span className="absolute top-0 h-full w-px bg-ink-100" />
@@ -434,11 +484,12 @@ function EventRow({ event }: { event: ApiAgentEvent }) {
             <span className={cn('rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold', LEVEL_STYLE[event.level])}>
               {event.level}
             </span>
-            <span className="font-mono text-[11px] text-ink-400">{event.kind}</span>
+            <span className="font-mono text-[11px] text-ink-400">{eventCategoryLabel(event.category)}</span>
+            <span className="font-mono text-[10px] text-ink-300">{event.kind}</span>
             <span className="ml-auto text-[11px] text-ink-400">{relative(event.createdAt, t)}</span>
           </div>
           <div className="mt-2 text-[13px] font-semibold text-ink-900">{event.title}</div>
-          {Object.keys(event.data ?? {}).length > 0 && <EventDetails event={event} />}
+          <SafeEventDetails event={event} />
         </div>
       </div>
     </div>
@@ -934,7 +985,7 @@ function WakeEconomicsPanel(props: {
           <RefreshButton loading={props.loading} onClick={props.onRefresh} />
         </div>
         <div className="mt-4 flex flex-wrap items-end gap-3">
-          <div className="grid grid-cols-4 gap-1 rounded-[11px] border border-ink-100 bg-cloud p-1">
+          <div className="grid grid-cols-5 gap-1 rounded-[11px] border border-ink-100 bg-cloud p-1">
             {DEV_PANELS.map((item) => (
               <button
                 type="button"
@@ -1147,7 +1198,7 @@ function TriageEconomicsPanel(props: {
           <RefreshButton loading={props.loading} onClick={props.onRefresh} />
         </div>
         <div className="mt-4 flex flex-wrap items-end gap-3">
-          <div className="grid grid-cols-4 gap-1 rounded-[11px] border border-ink-100 bg-cloud p-1">
+          <div className="grid grid-cols-5 gap-1 rounded-[11px] border border-ink-100 bg-cloud p-1">
             {DEV_PANELS.map((item) => (
               <button
                 type="button"
@@ -1354,9 +1405,13 @@ export function ObservabilityView() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [agentId, setAgentId] = useState<string>('all')
   const [status, setStatus] = useState<StatusFilter>('all')
+  const [eventFilter, setEventFilter] = useState<EventFilter>('all')
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [eventsLoading, setEventsLoading] = useState(false)
+  const [eventsErr, setEventsErr] = useState<string | null>(null)
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null)
   const [workspaceAgentId, setWorkspaceAgentId] = useState<string>('')
   const [workspaceFiles, setWorkspaceFiles] = useState<ApiAgentWorkspaceFile[]>([])
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -1420,12 +1475,17 @@ export function ObservabilityView() {
   const loadEvents = useCallback(async (runId: string | null) => {
     if (!runId) {
       setEvents([])
+      setEventsErr(null)
       return
     }
+    setEventsLoading(true)
+    setEventsErr(null)
     try {
       setEvents(await api.getAgentRunEvents(runId))
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setEventsErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setEventsLoading(false)
     }
   }, [])
 
@@ -1522,6 +1582,31 @@ export function ObservabilityView() {
     () => runs.find((run) => run.id === selectedId) ?? null,
     [runs, selectedId],
   )
+  const sortedEvents = useMemo(() => sortAgentRunEvents(events), [events])
+  const safeEvents = useMemo(() => sortedEvents.map(projectObservableEvent), [sortedEvents])
+  const visibleEvents = useMemo(
+    () => safeEvents.filter((event) => eventFilter === 'all' || event.category === eventFilter),
+    [eventFilter, safeEvents],
+  )
+  const session = useMemo(() => getAgentRunSession(sortedEvents), [sortedEvents])
+  const resumeCommand = useMemo(
+    () => session ? buildResumeCommand(session.engine, session.sessionId) : null,
+    [session],
+  )
+
+  useEffect(() => {
+    setEventFilter('all')
+    setCopyFeedback(null)
+  }, [selectedId])
+
+  const copyText = useCallback(async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopyFeedback(`${label} copied`)
+    } catch {
+      setCopyFeedback(`${label} could not be copied`)
+    }
+  }, [])
 
   if (panel === 'wakes') {
     return (
@@ -1572,12 +1657,19 @@ export function ObservabilityView() {
               <div className="mt-1 text-[12px] text-ink-500">{t('obs.subtitle')}</div>
             </div>
             <RefreshButton
-              loading={panel === 'workspace' ? workspaceLoading : loading}
-              onClick={() => panel === 'workspace' ? void loadWorkspaceFiles() : void loadRuns()}
+              loading={panel === 'traces' ? loading || eventsLoading : workspaceLoading}
+              onClick={() => {
+                if (panel === 'traces') {
+                  void loadRuns()
+                  void loadEvents(selectedId)
+                  return
+                }
+                void loadWorkspaceFiles()
+              }}
             />
           </div>
 
-          <div className="mt-4 grid grid-cols-4 gap-1 rounded-[11px] border border-ink-100 bg-cloud p-1">
+          <div className="mt-4 grid grid-cols-5 gap-1 rounded-[11px] border border-ink-100 bg-cloud p-1">
             {DEV_PANELS.map((item) => (
               <button
                 type="button"
@@ -1759,6 +1851,7 @@ export function ObservabilityView() {
                         <span>{clock(selected.startedAt)}</span>
                         <span>/</span>
                         <span>{selected.stage ?? t('common.idle')}</span>
+                        {selected.finishedAt && <><span>/</span><span>finished {clock(selected.finishedAt)}</span></>}
                       </div>
                     </div>
                   </div>
@@ -1767,8 +1860,14 @@ export function ObservabilityView() {
                       {selected.error || selected.summary}
                     </div>
                   )}
+                  <MetaGrid items={[
+                    { label: 'Agent role', value: selected.agentRole ?? '—' },
+                    { label: 'Task / stage', value: selected.stage ?? selected.summary ?? '—' },
+                    { label: 'Trigger', value: triggerLabel(selected.trigger) },
+                    { label: 'Events', value: safeEvents.length },
+                  ]} />
                 </div>
-                <div className="grid min-w-[360px] grid-cols-4 gap-2">
+                <div className="grid min-w-[360px] grid-cols-2 gap-2">
                   <div className="rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
                     <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-300">{t('obs.metaDuration')}</div>
                     <div className="mt-1 font-mono text-[13px] text-ink-900">{elapsed(selected.durationMs)}</div>
@@ -1787,16 +1886,80 @@ export function ObservabilityView() {
                   </div>
                 </div>
               </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-300">Engine session</div>
+                      <div className="mt-1 font-mono text-[11px] text-ink-700">
+                        {session ? `${session.engine} · ${session.sessionId}` : 'Unavailable — no session id provided'}
+                      </div>
+                    </div>
+                    {resumeCommand && (
+                      <button
+                        type="button"
+                        onClick={() => void copyText(resumeCommand, `${session?.engine ?? 'Session'} resume command`)}
+                        className="rounded-[8px] border border-sky2-100 bg-sky2-50 px-2.5 py-1.5 text-[11px] font-semibold text-skype-deep hover:bg-sky2-100"
+                      >
+                        Copy {session?.engine} resume
+                      </button>
+                    )}
+                  </div>
+                  {resumeCommand && <code className="mt-2 block overflow-x-auto rounded-[8px] bg-ink-900 px-2.5 py-2 text-[11px] text-sky2-50">{resumeCommand}</code>}
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-300">Run logs</div>
+                    <div className="mt-1 text-[11px] text-ink-500">Copies all {safeEvents.length} events, ignoring the current filter.</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void copyText(formatAgentRunLogs(selected, sortedEvents), 'All logs')}
+                    disabled={safeEvents.length === 0}
+                    className="shrink-0 rounded-[8px] border border-ink-100 bg-cloud px-2.5 py-1.5 text-[11px] font-semibold text-skype-deep hover:border-sky2-100 hover:bg-sky2-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Copy all logs
+                  </button>
+                </div>
+              </div>
+              {copyFeedback && <div className="mt-2 text-right text-[11px] text-ink-500" role="status">{copyFeedback}</div>}
             </header>
 
             <div className="min-h-0 overflow-auto px-6 py-5">
-              {events.length === 0 ? (
-                <div className="grid h-full place-items-center text-[13px] text-ink-400">{t('obs.noEvents')}</div>
+              {eventsLoading ? (
+                <div className="grid h-full place-items-center text-[13px] text-ink-400">Loading run events…</div>
+              ) : eventsErr ? (
+                <div className="grid h-full place-items-center px-8 text-center text-[13px] leading-[1.6] text-coral-deep">
+                  Unable to load events for this run. Refresh to try again.
+                </div>
+              ) : events.length === 0 ? (
+                <div className="grid h-full place-items-center text-[13px] text-ink-400">No events recorded for this run.</div>
               ) : (
                 <div className="max-w-[1040px]">
-                  {events.map((event) => (
-                    <EventRow key={event.id} event={event} />
-                  ))}
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-[11px] text-ink-400">Showing {visibleEvents.length} of {safeEvents.length} events</div>
+                    <div className="flex flex-wrap gap-1 rounded-[9px] border border-ink-100 bg-cloud p-1" role="group" aria-label="Event filter">
+                      {EVENT_FILTERS.map((filter) => (
+                        <button
+                          key={filter.value}
+                          type="button"
+                          onClick={() => setEventFilter(filter.value)}
+                          aria-pressed={eventFilter === filter.value}
+                          className={cn(
+                            'rounded-[7px] px-2.5 py-1.5 text-[11px] font-semibold transition',
+                            eventFilter === filter.value ? 'bg-sky2-50 text-skype-deep shadow-soft' : 'text-ink-500 hover:text-ink-700',
+                          )}
+                        >
+                          {filter.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {visibleEvents.length === 0 ? (
+                    <div className="rounded-[10px] border border-dashed border-ink-200 px-4 py-8 text-center text-[13px] text-ink-400">
+                      No {EVENT_FILTERS.find((filter) => filter.value === eventFilter)?.label.toLowerCase()} events in this run.
+                    </div>
+                  ) : visibleEvents.map((event) => <EventRow key={event.id} event={event} />)}
                 </div>
               )}
             </div>
