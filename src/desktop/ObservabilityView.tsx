@@ -17,11 +17,16 @@ import { useParticipants } from '@/stores/participants'
 import { useResizableWidth } from '@/lib/useResizableWidth'
 import { useT, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import { buildWorkflowGraph } from './agent-workflow'
 
 type StatusFilter = ApiAgentRunStatus | 'all'
-type DevPanel = 'traces' | 'workspace' | 'triage' | 'wakes'
-const DEV_PANELS: DevPanel[] = ['traces', 'workspace', 'triage', 'wakes']
-const PANEL_LABEL_KEY: Record<DevPanel, MessageKey> = { traces: 'obs.panelTraces', workspace: 'obs.panelWorkspace', triage: 'obs.panelTriage', wakes: 'obs.panelWakes' }
+type DevPanel = 'traces' | 'workflow' | 'workspace' | 'triage' | 'wakes'
+const DEV_PANELS: DevPanel[] = ['traces', 'workflow', 'workspace', 'triage', 'wakes']
+const PANEL_LABEL_KEY: Record<Exclude<DevPanel, 'workflow'>, MessageKey> = { traces: 'obs.panelTraces', workspace: 'obs.panelWorkspace', triage: 'obs.panelTriage', wakes: 'obs.panelWakes' }
+
+function panelLabel(item: DevPanel, t: ReturnType<typeof useT>): string {
+  return item === 'workflow' ? 'Workflow' : t(PANEL_LABEL_KEY[item])
+}
 const TRIAGE_WINDOWS: { hours: number; key: MessageKey }[] = [
   { hours: 6, key: 'obs.window6h' }, { hours: 24, key: 'obs.window24h' }, { hours: 72, key: 'obs.window3d' }, { hours: 168, key: 'obs.window7d' },
 ]
@@ -712,6 +717,174 @@ function PriceMenuTable({ rows }: { rows: { model: string; inPer1M: number; cach
   )
 }
 
+function workflowSourceLabel(source: string): string {
+  return source.replace(/[._-]/g, ' ')
+}
+
+function workflowStatus(status: string): { label: string; dot: string; cls: string } {
+  return STATUS_STYLE[status as ApiAgentRunStatus] ?? {
+    label: status,
+    dot: 'var(--ink-300)',
+    cls: 'bg-ink-100 text-ink-600 border-ink-100',
+  }
+}
+
+function WorkflowPanel(props: {
+  runs: ApiAgentRun[]
+  selectedId: string | null
+  onSelect: (runId: string) => void
+  onOpenTrace: () => void
+}) {
+  const graph = useMemo(() => buildWorkflowGraph(props.runs, props.selectedId), [props.runs, props.selectedId])
+  const selected = graph.runs.find((run) => run.id === graph.anchorId) ?? null
+  const activeCount = graph.runs.filter((run) => run.status === 'running').length
+  const completedCount = graph.runs.filter((run) => run.status === 'completed').length
+  const failedCount = graph.runs.filter((run) => run.status === 'failed' || run.status === 'stalled').length
+  const graphHeight = Math.max(240, graph.runs.length * 76 + 32)
+  const rootY = graphHeight / 2
+
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[auto_1fr] overflow-hidden">
+      <header className="border-b border-ink-100 bg-cloud/80 px-6 py-4 backdrop-blur">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="font-display text-[24px] font-medium text-ink-900">Agent Workflow</h2>
+              <span className="rounded-full border border-sky2-100 bg-sky2-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-skype-deep">Live</span>
+            </div>
+            <div className="mt-1 text-[12px] text-ink-500">Shared conversation context → parallel agent runs</div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
+              <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-ink-300">Agents</div>
+              <div className="mt-1 font-mono text-[13px] text-ink-900">{graph.runs.length}</div>
+            </div>
+            <div className="rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
+              <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-ink-300">Active</div>
+              <div className="mt-1 font-mono text-[13px] text-skype-deep">{activeCount}</div>
+            </div>
+            <div className="rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
+              <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-ink-300">Done / error</div>
+              <div className="mt-1 font-mono text-[13px] text-ink-900">{completedCount} / {failedCount}</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="min-h-0 overflow-auto px-6 py-5">
+        {graph.runs.length === 0 ? (
+          <div className="grid h-full place-items-center text-[13px] text-ink-400">No agent workflow runs yet.</div>
+        ) : (
+          <div className="mx-auto max-w-[980px] space-y-5">
+            <div className="rounded-[12px] border border-ink-100 bg-paper p-4 shadow-soft">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-400">Current flow</div>
+                  <div className="mt-1 text-[12px] text-ink-600">
+                    Triggered by <span className="font-semibold text-ink-900">{workflowSourceLabel(graph.source)}</span>
+                    {graph.conversationIds.length > 0 && <> · {graph.conversationIds.length} shared conversation{graph.conversationIds.length === 1 ? '' : 's'}</>}
+                  </div>
+                </div>
+                <div className="text-[10px] text-ink-400">Click an agent node to inspect its trace</div>
+              </div>
+
+              <div className="relative overflow-x-auto rounded-[10px] bg-cloud/70">
+                <div className="relative min-w-[650px]" style={{ height: graphHeight }}>
+                  <svg
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 h-full w-full"
+                    viewBox={`0 0 650 ${graphHeight}`}
+                    preserveAspectRatio="none"
+                  >
+                    {graph.runs.map((run, index) => {
+                      const status = workflowStatus(run.status)
+                      const targetY = 16 + index * 76 + 30
+                      return (
+                        <line
+                          key={run.id}
+                          x1="166"
+                          y1={rootY}
+                          x2="218"
+                          y2={targetY}
+                          stroke={status.dot}
+                          strokeOpacity="0.45"
+                          strokeWidth="1.5"
+                        />
+                      )
+                    })}
+                  </svg>
+
+                  <div
+                    className="absolute left-4 flex w-[150px] -translate-y-1/2 flex-col justify-center rounded-[10px] border border-sky2-100 bg-sky2-50 px-3 py-3"
+                    style={{ top: rootY }}
+                  >
+                    <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-skype-deep">Workflow trigger</div>
+                    <div className="mt-1 truncate text-[12px] font-semibold text-ink-900">{workflowSourceLabel(graph.source)}</div>
+                    <div className="mt-1 text-[10px] text-ink-500">{graph.runs.length} agent run{graph.runs.length === 1 ? '' : 's'}</div>
+                  </div>
+
+                  <div className="absolute left-[218px] right-4 top-4 space-y-2">
+                    {graph.runs.map((run) => {
+                      const status = workflowStatus(run.status)
+                      const isSelected = run.id === graph.anchorId
+                      return (
+                        <button
+                          key={run.id}
+                          type="button"
+                          aria-pressed={isSelected}
+                          onClick={() => props.onSelect(run.id)}
+                          className={cn(
+                            'flex min-h-[60px] w-full items-center justify-between gap-3 rounded-[10px] border bg-paper px-3 text-left transition hover:-translate-y-px hover:shadow-soft',
+                            isSelected ? 'border-skype bg-sky2-50/50 shadow-soft' : 'border-ink-100',
+                          )}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: status.dot }} />
+                            <span className="min-w-0">
+                              <span className="flex flex-wrap items-center gap-2">
+                                <span className="truncate text-[12.5px] font-semibold text-ink-900">{run.agentName}</span>
+                                {run.agentRole && <span className="truncate text-[10px] text-ink-400">{run.agentRole}</span>}
+                              </span>
+                              <span className="mt-1 block truncate font-mono text-[10px] text-ink-400">{run.stage ?? 'idle'} · {relative(run.updatedAt)}</span>
+                            </span>
+                          </span>
+                          <span className={cn('shrink-0 rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em]', status.cls)}>{status.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {selected && (
+              <div className="rounded-[12px] border border-ink-100 bg-paper p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-[13px] font-semibold text-ink-900">{selected.agentName}</div>
+                      <StatusPill status={selected.status as ApiAgentRunStatus} />
+                    </div>
+                    <div className="mt-1 font-mono text-[10px] text-ink-400">{selected.id} · {selected.stage ?? 'idle'} · updated {relative(selected.updatedAt)}</div>
+                    {(selected.error || selected.summary) && <div className="mt-2 text-[12px] leading-[1.55] text-ink-600">{selected.error || selected.summary}</div>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={props.onOpenTrace}
+                    className="rounded-[8px] border border-ink-100 bg-cloud px-3 py-2 text-[11px] font-semibold text-ink-700 transition hover:border-sky2-100 hover:text-skype-deep"
+                  >
+                    Open trace
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /** The triage cost-effectiveness ledger — a self-contained full-width panel.
  *  Answers the user's question: is the small-brain gate actually saving money,
  *  given triage is always cold (uncached) while big-brain turns are cache-warm? */
@@ -772,7 +945,7 @@ function WakeEconomicsPanel(props: {
                   props.panel === item ? 'bg-sky2-50 text-skype-deep shadow-soft' : 'text-ink-500 hover:text-ink-700',
                 )}
               >
-                {t(PANEL_LABEL_KEY[item])}
+                {panelLabel(item, t)}
               </button>
             ))}
           </div>
@@ -985,7 +1158,7 @@ function TriageEconomicsPanel(props: {
                   props.panel === item ? 'bg-sky2-50 text-skype-deep shadow-soft' : 'text-ink-500 hover:text-ink-700',
                 )}
               >
-                {t(PANEL_LABEL_KEY[item])}
+                {panelLabel(item, t)}
               </button>
             ))}
           </div>
@@ -1399,8 +1572,8 @@ export function ObservabilityView() {
               <div className="mt-1 text-[12px] text-ink-500">{t('obs.subtitle')}</div>
             </div>
             <RefreshButton
-              loading={panel === 'traces' ? loading : workspaceLoading}
-              onClick={() => panel === 'traces' ? void loadRuns() : void loadWorkspaceFiles()}
+              loading={panel === 'workspace' ? workspaceLoading : loading}
+              onClick={() => panel === 'workspace' ? void loadWorkspaceFiles() : void loadRuns()}
             />
           </div>
 
@@ -1415,12 +1588,12 @@ export function ObservabilityView() {
                   panel === item ? 'bg-sky2-50 text-skype-deep shadow-soft' : 'text-ink-500 hover:text-ink-700',
                 )}
               >
-                {t(PANEL_LABEL_KEY[item])}
+                    {panelLabel(item, t)}
               </button>
             ))}
           </div>
 
-          {panel === 'traces' ? (
+          {panel !== 'workspace' ? (
             <>
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <label className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400">
@@ -1477,7 +1650,7 @@ export function ObservabilityView() {
           )}
         </div>
 
-        {panel === 'traces' && err && (
+        {(panel === 'traces' || panel === 'workflow') && err && (
           <div className="mx-5 mt-4 rounded-[10px] bg-coral-soft px-3 py-2 text-[12px] text-coral-deep">{err}</div>
         )}
         {panel === 'workspace' && workspaceErr && (
@@ -1561,6 +1734,13 @@ export function ObservabilityView() {
               )}
             </div>
           </div>
+        ) : panel === 'workflow' ? (
+          <WorkflowPanel
+            runs={runs}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onOpenTrace={() => setPanel('traces')}
+          />
         ) : selected ? (
           <div className="grid h-full min-h-0 grid-rows-[auto_1fr] overflow-hidden">
             <header className="border-b border-ink-100 bg-cloud/80 px-6 py-4 backdrop-blur">
