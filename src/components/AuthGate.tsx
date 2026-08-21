@@ -17,6 +17,10 @@ import { isElectron } from '@/lib/runtime'
 import { AuthScreen } from './AuthScreen'
 import { WindowDragStrip } from './WindowDragStrip'
 
+// Local Vite development starts with the seeded demo user. Set
+// VITE_CUMORA_MOCK_AUTH=false when testing the real OAuth screen.
+const DEV_MOCK_AUTH = import.meta.env.DEV && import.meta.env.VITE_CUMORA_MOCK_AUTH !== 'false'
+
 interface AuthGateProps {
   children: ReactNode
   /** Override the "no token" rendering. The invite-accept flow uses this
@@ -68,7 +72,18 @@ export function AuthGate({ children, unauthFallback }: AuthGateProps) {
 
   useEffect(() => {
     let cancelled = false
-    if (!token) { markReady(); return }
+    if (!token) {
+      if (!DEV_MOCK_AUTH) { markReady(); return }
+      void api.devSession()
+        .then(({ token: nextToken, companyId }) => {
+          if (cancelled) return
+          setSession(nextToken, { id: '', email: '', name: '' }, companyId)
+        })
+        .catch(() => {
+          if (!cancelled) markReady()
+        })
+      return () => { cancelled = true }
+    }
     void (async () => {
       try {
         const r = await api.authMe()

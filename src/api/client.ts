@@ -849,6 +849,8 @@ export const api = {
     }),
   authMe: () =>
     http<MeResponse>('/auth/me'),
+  devSession: () =>
+    http<{ token: string; companyId: string }>('/auth/dev-session', { method: 'POST' }),
   /** sub2api-backed quota snapshot for the signed-in user. `configured`
    *  is false on deployments that don't run a sub2api gateway; `snapshot`
    *  is null when the user has no active subscription (e.g. provisioning

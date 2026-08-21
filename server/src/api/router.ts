@@ -23,10 +23,12 @@ import { BUSY_STATUS_LEASE_MS } from '../status.js'
 import { dispatchMessagePush } from '../push.js'
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import {
-  deleteSession, authMiddleware, type AuthedRequest,
+  createSession, deleteSession, authMiddleware, type AuthedRequest,
   audit, createWsTicket, gravatarUrlForEmail,
 } from '../auth.js'
 import { joinAllHands, onboardStarterAgents, seedMemberDms } from '../onboardCompany.js'
+import { ensureDevUser } from '../seed.js'
+import { DEV_MOCK_COMPANY_ID, DEV_MOCK_USER_ID, isDevMockAuthEnabled } from '../devMockAuth.js'
 import {
   type Provider, providerEnabled, createState, consumeState, isWebOAuthProvider, WEB_OAUTH_PROVIDERS,
   authorizeUrl, handleCallback, errorUrl, publicSignInError, returnUrlAllowed,
@@ -770,6 +772,22 @@ api.get('/metrics', async (req, res) => {
 })
 
 /* ============== Auth — OAuth only (Google + GitHub) ============== */
+
+/** Create a normal DB-backed session for the seeded demo user. This route is
+ *  only reachable from a local development server and is never exposed in
+ *  production or to non-loopback clients. */
+api.post('/auth/dev-session', safe(async (req, res) => {
+  if (!isDevMockAuthEnabled(env.NODE_ENV, env.PUBLIC_ORIGIN, req.socket.remoteAddress ?? '')) {
+    throw new HttpError(404, 'not found')
+  }
+  await ensureDevUser()
+  const { token } = await createSession(DEV_MOCK_USER_ID, {
+    ip: req.socket.remoteAddress,
+    ua: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
+  })
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({ token, companyId: DEV_MOCK_COMPANY_ID })
+}))
 
 /** 302 to the provider's consent screen. State is opaque to the client —
  *  we mint it server-side, save to Redis (5min TTL), and verify on the

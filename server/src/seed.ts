@@ -1,28 +1,28 @@
 import { pool } from './db/pool.js'
+import { DEV_MOCK_COMPANY_ID, DEV_MOCK_USER_ID } from './devMockAuth.js'
 
 /**
  * Ensure the placeholder 'yetone' user row exists so FK references from
  * seeded participants / conversations stay valid on a fresh DB. The row
- * has NO password and NO linked OAuth identity, so no one can log in as
- * it — it's purely a referential anchor for the demo data. On first
- * OAuth login, a separate `u-<uuid>` user is created with the real email.
+ * has NO password and NO linked OAuth identity. Local development can mint
+ * a normal DB-backed session for it; production still has no login path.
  */
-async function ensureDevUser(): Promise<void> {
-  const DEV_USER_ID = 'yetone'
+export async function ensureDevUser(): Promise<void> {
   const DEV_EMAIL = 'yetone@dev.local'
-  const { rows } = await pool.query(`SELECT 1 FROM users WHERE id = $1 LIMIT 1`, [DEV_USER_ID])
-  if (rows[0]) return
+  const { rows } = await pool.query(`SELECT 1 FROM users WHERE id = $1 LIMIT 1`, [DEV_MOCK_USER_ID])
+  if (!rows[0]) {
+    await pool.query(
+      `INSERT INTO users (id, email, display_name, password_hash) VALUES ($1, $2, $3, NULL)
+       ON CONFLICT (id) DO NOTHING`,
+      [DEV_MOCK_USER_ID, DEV_EMAIL, 'Yetone'],
+    )
+  }
   await pool.query(
-    `INSERT INTO users (id, email, display_name, password_hash) VALUES ($1, $2, $3, NULL)
-     ON CONFLICT (id) DO NOTHING`,
-    [DEV_USER_ID, DEV_EMAIL, 'Yetone'],
-  )
-  await pool.query(
-    `INSERT INTO company_members (company_id, user_id, role) VALUES ('personal', $1, 'owner')
+    `INSERT INTO company_members (company_id, user_id, role) VALUES ($1, $2, 'owner')
      ON CONFLICT DO NOTHING`,
-    [DEV_USER_ID],
+    [DEV_MOCK_COMPANY_ID, DEV_MOCK_USER_ID],
   )
-  console.log(`[seed] placeholder 'yetone' user created (FK anchor for demo data; no login)`)
+  if (!rows[0]) console.log(`[seed] placeholder '${DEV_MOCK_USER_ID}' user created (FK anchor for demo data)`)
 }
 
 interface SeedParticipant {
@@ -112,8 +112,7 @@ interface SeedMsg {
 const SEED_MESSAGES: SeedMsg[] = []
 
 export async function seedIfEmpty(): Promise<void> {
-  // Always make sure the dev account exists so login works on a fresh DB.
-  // Email: yetone@dev.local  Password: cumora-dev (DEV ONLY).
+  // Always make sure the dev account exists for demo data and local mock auth.
   await ensureDevUser()
 
   const { rows } = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM conversations')
