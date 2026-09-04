@@ -2,6 +2,9 @@
 feature: agent-run-detail
 workflow: orca-feat-builder
 created: 2026-08-21
+status: approved
+approved_by: yetone
+approved_at: 2026-08-21
 ---
 
 # Tasks: agent-run-detail
@@ -22,9 +25,10 @@ created: 2026-08-21
 
 **Acceptance Criteria**:
 
-1. BYOA 的聊天唤醒和 agenda 唤醒在获得非空 engine session id 后，均向当前 run 追加一次 kind=engine.session 的 agent event，data 至少包含 engine 和 sessionId；没有 session id 时不伪造事件。
-2. 当 resume 目标失效并被重置时，run 详情不会展示已失效的旧 session id；事件仍沿用现有租户校验、created_at ASC/id ASC 排序和 best-effort 写入语义。
-3. 新增的 session 事件构造与缺失/重复/失效场景有可执行的 Node 单元测试覆盖。
+1. BYOA 的聊天唤醒和 agenda 唤醒在获得非空 engine session id 后，均向当前 run 追加一次 kind=engine.session 的 agent event；contract 固定为 `level=info`、`stage=engine_session`、`data={ engine: 'claude'|'codex', sessionId }`，id trim 后必须非空；没有 session id 时不伪造事件。
+2. session 事件只允许 Claude/Codex，且每个 run 最多记录一个最终仍有效的 session id；当 resume 目标失效并被重置时，run 详情不会展示已失效的旧 session id。
+3. 事件仍沿用现有租户校验、created_at ASC/id ASC 排序和 best-effort 写入语义；写入失败不能把 Agent turn 标记为失败。
+4. 新增的 session 事件构造与缺失/重复/失效场景有可执行的 Node 单元测试覆盖。
 
 **Risk**: medium
 
@@ -42,6 +46,7 @@ created: 2026-08-21
 1. 为 engine.session、tool.started、tool.finished 及未知事件建立稳定分类，并保留同一 run 内按 createdAt、id 的确定性时间顺序。
 2. 事件详情和复制日志使用同一个安全投影：保留状态、标题、工具参数/结果和允许的摘要，过滤 reasoning、chain-of-thought、thought 等原始思维链字段，不因过滤而丢失工具调用/结果事件。
 3. 根据 engine 和 sessionId 生成可复制的 Claude `claude --resume <id>` 或 Codex `codex resume <id>` 命令；缺少 id 或不支持的 engine 返回不可用状态，命令参数须进行 shell 安全引用。
+4. 未知事件不得整体透传 payload；事件标题、run summary 和 error 只能作为纯文本处理，不能执行 HTML/Markdown 或混入原始 prompt/reasoning。
 
 **Risk**: medium
 
@@ -58,8 +63,9 @@ created: 2026-08-21
 1. 选中单次 run 后，详情头部展示状态、Agent 名称/角色、run id、Task/stage 或摘要、trigger、创建时间、结束时间（如有）、耗时和事件数量。
 2. 事件时间线按时间升序展示 Agent、Tool Call、Tool Result；支持 All/Agent/Tool Call/Tool Result 筛选，并在没有匹配事件时显示明确空状态。
 3. 每条事件都有可访问的展开/收起控件；展开内容使用安全投影展示详情，Think 只显示可观测状态或摘要，不显示原始思维链。
-4. 详情提供 Copy all logs，复制内容覆盖当前 run 的全部事件而非当前筛选结果，并显示成功/失败反馈；Claude/Codex session 区域分别提供可复制 resume 命令且不执行任何命令。
-5. 面板保持只读，不增加 stop/retry/编辑 agent 或 Workflow DAG 操作；加载中、请求失败、无事件、旧 daemon 未提供 session id 等状态均有稳定展示。
+4. 详情提供 Copy all logs，复制内容覆盖当前 run 的全部已持久化事件而非当前筛选结果，并显示成功/失败反馈；Claude/Codex session 区域分别提供可复制 resume 命令且不执行任何命令。
+5. 面板保持只读，不增加 stop/retry/编辑 agent 或 Workflow DAG 操作；未选中、加载中、请求失败、无事件、筛选为空、旧 daemon 未提供 session id 和自动刷新选中项等状态均有稳定展示。
+6. 详情控件可通过键盘操作，筛选当前状态和复制反馈使用可访问文本语义，不依赖颜色或动画传达结果。
 
 **Risk**: medium
 
@@ -69,6 +75,7 @@ created: 2026-08-21
 
 - `src/lib/agentRunDetail.test.ts`
 - `server/src/__tests__/agent-engine-session-event.test.ts`
+- `server/src/__tests__/agent-observability-route.test.ts`
 - `package.json`
 
 **Depends on**: agent-run-session-event, agent-run-detail-projection, agent-run-detail-panel
@@ -76,7 +83,9 @@ created: 2026-08-21
 **Acceptance Criteria**:
 
 1. 测试覆盖事件分类/排序、筛选不影响全量日志复制、敏感思维链字段过滤、工具参数与结果保留、Claude/Codex/缺失 session 的命令生成，以及 session 事件的缺失/重复/失效边界。
-2. 新增前端纯函数测试有独立 npm test:agent-run-detail 入口；同时执行 npm run lint、npm run typecheck、npm run server:typecheck 和该聚焦测试，并记录环境导致的基线失败而不将其误判为本特性回归。
+2. 测试还覆盖未知事件 payload 不透传、标题/summary/error 纯文本边界、session reset 后不显示旧 id，以及运行中 duration 和自动刷新选中项不漂移。
+3. 路由测试验证当前 tenant 可读、跨 tenant 或不存在的 run 返回同样的 not found、事件 wire format 使用 camelCase 且按 createdAt/id 稳定排序。
+4. 新增前端纯函数测试有独立 npm test:agent-run-detail 入口；同时执行 npm run lint、npm run typecheck、npm run server:typecheck 和该聚焦测试，并记录环境导致的基线失败而不将其误判为本特性回归。
 
 **Risk**: low
 

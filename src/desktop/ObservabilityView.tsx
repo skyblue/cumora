@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   type ApiAgentEvent,
@@ -772,8 +772,10 @@ function workflowSourceLabel(source: string): string {
   return source.replace(/[._-]/g, ' ')
 }
 
-function workflowStatus(status: string): { label: string; dot: string; cls: string } {
-  return STATUS_STYLE[status as ApiAgentRunStatus] ?? {
+function workflowStatus(status: string, t: ReturnType<typeof useT>): { label: string; dot: string; cls: string } {
+  const style = STATUS_STYLE[status as ApiAgentRunStatus]
+  if (style) return { label: t(style.key), dot: style.dot, cls: style.cls }
+  return {
     label: status,
     dot: 'var(--ink-300)',
     cls: 'bg-ink-100 text-ink-600 border-ink-100',
@@ -786,6 +788,7 @@ function WorkflowPanel(props: {
   onSelect: (runId: string) => void
   onOpenTrace: () => void
 }) {
+  const t = useT()
   const graph = useMemo(() => buildWorkflowGraph(props.runs, props.selectedId), [props.runs, props.selectedId])
   const selected = graph.runs.find((run) => run.id === graph.anchorId) ?? null
   const activeCount = graph.runs.filter((run) => run.status === 'running').length
@@ -848,7 +851,7 @@ function WorkflowPanel(props: {
                     preserveAspectRatio="none"
                   >
                     {graph.runs.map((run, index) => {
-                      const status = workflowStatus(run.status)
+                      const status = workflowStatus(run.status, t)
                       const targetY = 16 + index * 76 + 30
                       return (
                         <line
@@ -876,7 +879,7 @@ function WorkflowPanel(props: {
 
                   <div className="absolute left-[218px] right-4 top-4 space-y-2">
                     {graph.runs.map((run) => {
-                      const status = workflowStatus(run.status)
+                      const status = workflowStatus(run.status, t)
                       const isSelected = run.id === graph.anchorId
                       return (
                         <button
@@ -896,7 +899,7 @@ function WorkflowPanel(props: {
                                 <span className="truncate text-[12.5px] font-semibold text-ink-900">{run.agentName}</span>
                                 {run.agentRole && <span className="truncate text-[10px] text-ink-400">{run.agentRole}</span>}
                               </span>
-                              <span className="mt-1 block truncate font-mono text-[10px] text-ink-400">{run.stage ?? 'idle'} · {relative(run.updatedAt)}</span>
+                              <span className="mt-1 block truncate font-mono text-[10px] text-ink-400">{run.stage ?? 'idle'} · {relative(run.updatedAt, t)}</span>
                             </span>
                           </span>
                           <span className={cn('shrink-0 rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em]', status.cls)}>{status.label}</span>
@@ -916,7 +919,7 @@ function WorkflowPanel(props: {
                       <div className="text-[13px] font-semibold text-ink-900">{selected.agentName}</div>
                       <StatusPill status={selected.status as ApiAgentRunStatus} />
                     </div>
-                    <div className="mt-1 font-mono text-[10px] text-ink-400">{selected.id} · {selected.stage ?? 'idle'} · updated {relative(selected.updatedAt)}</div>
+                    <div className="mt-1 font-mono text-[10px] text-ink-400">{selected.id} · {selected.stage ?? 'idle'} · updated {relative(selected.updatedAt, t)}</div>
                     {(selected.error || selected.summary) && <div className="mt-2 text-[12px] leading-[1.55] text-ink-600">{selected.error || selected.summary}</div>}
                   </div>
                   <button
@@ -1411,6 +1414,7 @@ export function ObservabilityView() {
   const [err, setErr] = useState<string | null>(null)
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsErr, setEventsErr] = useState<string | null>(null)
+  const [eventsRunId, setEventsRunId] = useState<string | null>(null)
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null)
   const [workspaceAgentId, setWorkspaceAgentId] = useState<string>('')
   const [workspaceFiles, setWorkspaceFiles] = useState<ApiAgentWorkspaceFile[]>([])
@@ -1425,6 +1429,8 @@ export function ObservabilityView() {
   const [triageErr, setTriageErr] = useState<string | null>(null)
   const [wakesLoading, setWakesLoading] = useState(false)
   const [wakesErr, setWakesErr] = useState<string | null>(null)
+  const runsRequestRef = useRef(0)
+  const eventsRequestRef = useRef(0)
   // Tree state: which folder paths are expanded. New file lists default to
   // every folder open (most agents have <20 files, flat-feeling is right).
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
@@ -1455,6 +1461,7 @@ export function ObservabilityView() {
   }, [agents, workspaceAgentId])
 
   const loadRuns = useCallback(async () => {
+    const requestId = ++runsRequestRef.current
     setLoading(true)
     setErr(null)
     try {
@@ -1463,29 +1470,40 @@ export function ObservabilityView() {
         status,
         limit: 80,
       })
+      if (requestId !== runsRequestRef.current) return
       setRuns(data)
       setSelectedId((cur) => cur && data.some((run) => run.id === cur) ? cur : data[0]?.id ?? null)
     } catch (e) {
+      if (requestId !== runsRequestRef.current) return
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      if (requestId === runsRequestRef.current) setLoading(false)
     }
   }, [agentId, status])
 
   const loadEvents = useCallback(async (runId: string | null) => {
+    const requestId = ++eventsRequestRef.current
     if (!runId) {
       setEvents([])
       setEventsErr(null)
+      setEventsRunId(null)
+      setEventsLoading(false)
       return
     }
     setEventsLoading(true)
     setEventsErr(null)
     try {
-      setEvents(await api.getAgentRunEvents(runId))
+      const nextEvents = await api.getAgentRunEvents(runId)
+      if (requestId !== eventsRequestRef.current) return
+      setEvents(nextEvents)
+      setEventsRunId(runId)
     } catch (e) {
+      if (requestId !== eventsRequestRef.current) return
+      setEvents([])
+      setEventsRunId(null)
       setEventsErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setEventsLoading(false)
+      if (requestId === eventsRequestRef.current) setEventsLoading(false)
     }
   }, [])
 
@@ -1597,7 +1615,12 @@ export function ObservabilityView() {
   useEffect(() => {
     setEventFilter('all')
     setCopyFeedback(null)
+    setEvents([])
+    setEventsErr(null)
+    setEventsRunId(null)
   }, [selectedId])
+
+  const eventsReady = Boolean(selectedId && eventsRunId === selectedId && !eventsLoading && !eventsErr)
 
   const copyText = useCallback(async (value: string, label: string) => {
     try {
@@ -1895,7 +1918,7 @@ export function ObservabilityView() {
                         {session ? `${session.engine} · ${session.sessionId}` : 'Unavailable — no session id provided'}
                       </div>
                     </div>
-                    {resumeCommand && (
+                    {eventsReady && resumeCommand && (
                       <button
                         type="button"
                         onClick={() => void copyText(resumeCommand, `${session?.engine ?? 'Session'} resume command`)}
@@ -1905,17 +1928,19 @@ export function ObservabilityView() {
                       </button>
                     )}
                   </div>
-                  {resumeCommand && <code className="mt-2 block overflow-x-auto rounded-[8px] bg-ink-900 px-2.5 py-2 text-[11px] text-sky2-50">{resumeCommand}</code>}
+                  {eventsReady && resumeCommand && <code className="mt-2 block overflow-x-auto rounded-[8px] bg-ink-900 px-2.5 py-2 text-[11px] text-sky2-50">{resumeCommand}</code>}
                 </div>
                 <div className="flex items-center justify-between gap-3 rounded-[10px] border border-ink-100 bg-paper px-3 py-2">
                   <div>
                     <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink-300">Run logs</div>
-                    <div className="mt-1 text-[11px] text-ink-500">Copies all {safeEvents.length} events, ignoring the current filter.</div>
+                    <div className="mt-1 text-[11px] text-ink-500">
+                      {eventsLoading ? 'Loading events…' : eventsErr ? 'Events unavailable until refresh succeeds.' : `Copies all ${safeEvents.length} events, ignoring the current filter.`}
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => void copyText(formatAgentRunLogs(selected, sortedEvents), 'All logs')}
-                    disabled={safeEvents.length === 0}
+                    disabled={!eventsReady || safeEvents.length === 0}
                     className="shrink-0 rounded-[8px] border border-ink-100 bg-cloud px-2.5 py-1.5 text-[11px] font-semibold text-skype-deep hover:border-sky2-100 hover:bg-sky2-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Copy all logs
