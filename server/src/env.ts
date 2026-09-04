@@ -6,6 +6,7 @@
  *  environment win over those in `.env` (dotenv default), so deployment
  *  doesn't need a file. */
 import 'dotenv/config'
+import { isLocalAuthBypassEnabled } from './local-auth.js'
 
 function required(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback
@@ -32,6 +33,12 @@ const DEV_AGENT_RUNTIME_SECRET = 'dev-agent-runtime-secret-do-not-use-in-prod'
 export const env = {
   PORT: Number(process.env.PORT ?? 5181),
   NODE_ENV: process.env.NODE_ENV ?? 'development',
+  /**
+   * Local-only auth bypass. When enabled, the SPA can request a real session
+   * for the first active user without going through OAuth. The value is
+   * ignored in production and the route also requires a loopback request.
+   */
+  LOCAL_AUTH_BYPASS: isLocalAuthBypassEnabled(process.env.NODE_ENV ?? 'development', process.env.CUMORA_LOCAL_AUTH_BYPASS),
   DATABASE_URL: required('DATABASE_URL', `postgres://${process.env.USER ?? 'postgres'}@localhost:5432/cumora`),
   REDIS_URL: required('REDIS_URL', 'redis://localhost:6379'),
   OPENAI_API_KEY: required('OPENAI_API_KEY'),

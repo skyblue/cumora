@@ -26,9 +26,8 @@ import {
   createSession, deleteSession, authMiddleware, type AuthedRequest,
   audit, createWsTicket, gravatarUrlForEmail,
 } from '../auth.js'
+import { isLocalAuthRequestAllowed } from '../local-auth.js'
 import { joinAllHands, onboardStarterAgents, seedMemberDms } from '../onboardCompany.js'
-import { ensureDevUser } from '../seed.js'
-import { DEV_MOCK_COMPANY_ID, DEV_MOCK_USER_ID, isDevMockAuthEnabled } from '../devMockAuth.js'
 import {
   type Provider, providerEnabled, createState, consumeState, isWebOAuthProvider, WEB_OAUTH_PROVIDERS,
   authorizeUrl, handleCallback, errorUrl, publicSignInError, returnUrlAllowed,
@@ -771,22 +770,45 @@ api.get('/metrics', async (req, res) => {
   res.send(renderProm())
 })
 
-/* ============== Auth — OAuth only (Google + GitHub) ============== */
+/* ============== Auth — local development + OAuth =================== */
 
-/** Create a normal DB-backed session for the seeded demo user. This route is
- *  only reachable from a local development server and is never exposed in
- *  production or to non-loopback clients. */
-api.post('/auth/dev-session', safe(async (req, res) => {
-  if (!isDevMockAuthEnabled(env.NODE_ENV, env.PUBLIC_ORIGIN, req.socket.remoteAddress ?? '')) {
-    throw new HttpError(404, 'not found')
+/** Create a real DB-backed session for the first active user. This is
+ * deliberately narrower than a general dev auth mode: the env switch,
+ * non-production runtime, loopback public origin, and loopback client are
+ * all required before this route can mint a session. */
+api.post('/auth/local-session', safe(async (req, res) => {
+  if (!isLocalAuthRequestAllowed({
+    nodeEnv: env.NODE_ENV,
+    enabled: env.LOCAL_AUTH_BYPASS,
+    publicOrigin: env.PUBLIC_ORIGIN,
+    remoteAddress: req.socket.remoteAddress ?? '',
+  })) {
+    res.status(404).json({ error: 'not found' }); return
   }
-  await ensureDevUser()
-  const { token } = await createSession(DEV_MOCK_USER_ID, {
+
+  const { rows: users } = await pool.query<{ id: string }>(
+    `SELECT id FROM users
+      WHERE deleted_at IS NULL AND suspended_at IS NULL
+      ORDER BY id ASC
+      LIMIT 1`,
+  )
+  const firstUser = users[0]
+  if (!firstUser) {
+    res.status(503).json({ error: 'no active user available' }); return
+  }
+  const { rows: companies } = await pool.query<{ company_id: string }>(
+    `SELECT company_id FROM company_members
+      WHERE user_id = $1
+      ORDER BY joined_at ASC
+      LIMIT 1`,
+    [firstUser.id],
+  )
+  const { token } = await createSession(firstUser.id, {
     ip: req.socket.remoteAddress,
     ua: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
   })
   res.setHeader('Cache-Control', 'no-store')
-  res.json({ token, companyId: DEV_MOCK_COMPANY_ID })
+  res.json({ token, companyId: companies[0]?.company_id ?? null })
 }))
 
 /** 302 to the provider's consent screen. State is opaque to the client —
