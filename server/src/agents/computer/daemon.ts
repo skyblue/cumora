@@ -31,6 +31,7 @@ const execFileP = promisify(execFile)
 
 import { type TokenUsage, usageFromClaude } from '../cost.js'
 import { buildEngineSessionEvent, shouldRecordEngineSession, type PreviousEngineSession } from './session-observability.js'
+import { emitRuntimeEvent } from '../../../../agent-cli/src/events/emitter.js'
 import { GLANCE_YIELD_RULES } from '../glance-protocol.js'
 import {
   composeMemoryDigest,
@@ -1826,9 +1827,10 @@ export class AgentRunner {
       previous: this.lastEngineSessionEvent,
     })) return
     this.lastEngineSessionEvent = { runId: runId!, sessionId: event.data.sessionId }
-    void runtimeBest(this.cfg.serverUrl, '/events', this.token, {
-      runId,
-      ...event,
+    void emitRuntimeEvent({
+      serverUrl: this.cfg.serverUrl,
+      token: this.token,
+      event: { runId: runId!, ...event },
     })
   }
 
@@ -2190,13 +2192,17 @@ export class AgentRunner {
     exitCode: number
   }): Promise<void> {
     if (args.runId) {
-      await runtimeBest(this.cfg.serverUrl, '/events', args.token, {
-        runId: args.runId,
-        kind: 'engine.failed',
-        level: 'error',
-        title: `${this.adapter.id} exited ${args.exitCode}`,
-        data: { error: args.error },
-        stage: 'failed',
+      await emitRuntimeEvent({
+        serverUrl: this.cfg.serverUrl,
+        token: args.token,
+        event: {
+          runId: args.runId,
+          kind: 'engine.failed',
+          level: 'error',
+          title: `${this.adapter.id} exited ${args.exitCode}`,
+          data: { error: args.error },
+          stage: 'engine_failed',
+        },
       })
     }
     const hint = authFailureHint(this.adapter.id, args.error)
